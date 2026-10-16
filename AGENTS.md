@@ -1,4 +1,3 @@
-
 # AGENTS.md
 
 This file provides guidance to IA Code when working with code in this repository.
@@ -22,7 +21,3 @@ O projeto deste repositório se trata
 7 -> Após ter ter documentado tudo no CHANGES.md prepare para gerar o commit, baseado nas alterações documentadas no CHANGES.md, ou seja deve ser feito baseado neste arquivo o commit mensage, mas espere a validação e comando do usuário
 8 -> Com a validação do usuário siga o processo de commit -> push (sync changes) -> Pull Request. Não é necessário abrir uma branch nova para cada feature, apenas utilize a branch Grolla para realizar este processo.
 9 -> Após o commit feito por favor limpe o arquivo CHANGES.md, ou seja apague, o conteúdo dele.
-
----
-
-## Architecture
