@@ -18,8 +18,8 @@
       "webhookId": "evolution-wa"
     },
     {
-      "id": "route",
-      "name": "Route",
+      "id": "route-evolution",
+      "name": "Route Evolution",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -27,27 +27,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "\n// ===== CONFIG (edite aqui) =====\nconst cfg = {\n  evolutionUrl: 'http://host.docker.internal:8080',\n  instance: 'triagem',\n  admin: '5511999999999@s.whatsapp.net',\n  sourceGroups: ['120363000000000001@g.us'],\n  destGroups: ['120363000000000002@g.us'],\n};\n// ===============================\nconst body = $input.first().json.body ?? $input.first().json;\nconst d = body.data ?? {};\nconst key = d.key ?? {};\nif (key.fromMe || !key.remoteJid) return [];\nconst m = d.message ?? {};\nconst text = m.conversation ?? m.extendedTextMessage?.text ?? m.imageMessage?.caption ?? m.videoMessage?.caption ?? '';\nif (!text.trim()) return [];\nconst jid = key.remoteJid;\nif (jid === cfg.admin) return [{ json: { type: 'admin', text, cfg } }];\nif (cfg.sourceGroups.includes(jid)) {\n  return [{ json: { type: 'group_msg', text, jid, sender: key.participant ?? '', pushName: d.pushName ?? '', cfg } }];\n}\nreturn [];\n"
-      }
-    },
-    {
-      "id": "is-group-msg",
-      "name": "Is Group Msg",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [
-        440,
-        0
-      ],
-      "parameters": {
-        "conditions": {
-          "string": [
-            {
-              "value1": "={{ $json.type }}",
-              "value2": "group_msg"
-            }
-          ]
-        }
+        "jsCode": "\n// ===== CONFIG (edite aqui) =====\nconst cfg = {\n  evolutionUrl: 'http://host.docker.internal:8080',\n  instance: 'triagem',\n  graphVersion: 'v21.0',\n  phoneNumberId: 'COLOQUE_PHONE_NUMBER_ID',\n  admin: '5511999999999', // número do admin, só dígitos (formato Cloud API)\n  sourceGroups: ['120363000000000001@g.us'],\n  destGroups: ['120363000000000002@g.us'],\n};\n// ===============================\n\nconst body = $input.first().json.body ?? $input.first().json;\nconst d = body.data ?? {};\nconst key = d.key ?? {};\nif (key.fromMe || !key.remoteJid) return [];\nconst m = d.message ?? {};\nconst text = m.conversation ?? m.extendedTextMessage?.text ?? m.imageMessage?.caption ?? m.videoMessage?.caption ?? '';\nif (!text.trim()) return [];\nconst jid = key.remoteJid;\nif (!cfg.sourceGroups.includes(jid)) return [];\nreturn [{ json: { type: 'group_msg', text, jid, sender: key.participant ?? '', pushName: d.pushName ?? '', cfg } }];\n"
       }
     },
     {
@@ -56,8 +36,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        660,
-        -120
+        440,
+        0
       ],
       "parameters": {
         "method": "POST",
@@ -78,11 +58,40 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        880,
-        -120
+        660,
+        0
       ],
       "parameters": {
-        "jsCode": "\nconst src = $('Route').item.json;\nconst raw = $input.item.json.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';\nlet ad; try { ad = JSON.parse(raw); } catch { return []; }\nif (!ad.is_ad) return [];\nconst store = $getWorkflowStaticData('global');\nstore.pending = store.pending ?? {};\nstore.counter = (store.counter ?? 0) + 1;\nconst id = store.counter;\nstore.pending[id] = { text: src.text, ad, from: src.pushName || src.sender, at: Date.now() };\nconst msg = [\n  '🚗 *Novo anúncio #' + id + '*',\n  'De: ' + (src.pushName || src.sender),\n  ad.marca || ad.modelo ? 'Veículo: ' + [ad.marca, ad.modelo, ad.ano].filter(Boolean).join(' ') : '',\n  ad.km ? 'KM: ' + ad.km : '',\n  ad.preco ? 'Preço: ' + ad.preco : '',\n  ad.contato ? 'Contato: ' + ad.contato : '',\n  '',\n  '--- texto original ---',\n  src.text,\n  '',\n  'Responda:',\n  '*ok ' + id + '*  → repassar',\n  '*nao ' + id + '*  → descartar',\n  '*editar ' + id + ' novo texto*  → repassar com seu texto',\n].filter((l) => l !== '').join('\\n');\nreturn [{ json: { number: src.cfg.admin, text: msg, cfg: src.cfg } }];\n"
+        "jsCode": "\nconst src = $('Route Evolution').item.json;\nconst raw = $input.item.json.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';\nlet ad; try { ad = JSON.parse(raw); } catch { return []; }\nif (!ad.is_ad) return [];\nconst store = $getWorkflowStaticData('global');\nstore.pending = store.pending ?? {};\nstore.counter = (store.counter ?? 0) + 1;\nconst id = store.counter;\nstore.pending[id] = { text: src.text, ad, from: src.pushName || src.sender, at: Date.now() };\nconst msg = [\n  '🚗 *Novo anúncio #' + id + '*',\n  'De: ' + (src.pushName || src.sender),\n  ad.marca || ad.modelo ? 'Veículo: ' + [ad.marca, ad.modelo, ad.ano].filter(Boolean).join(' ') : '',\n  ad.km ? 'KM: ' + ad.km : '',\n  ad.preco ? 'Preço: ' + ad.preco : '',\n  ad.contato ? 'Contato: ' + ad.contato : '',\n  '',\n  '--- texto original ---',\n  src.text,\n  '',\n  'Responda:',\n  '*ok ' + id + '*  → repassar',\n  '*nao ' + id + '*  → descartar',\n  '*editar ' + id + ' novo texto*  → repassar com seu texto',\n].filter((l) => l !== '').join('\\n');\nreturn [{ json: { channel: 'meta', to: src.cfg.admin, text: msg, cfg: src.cfg } }];\n"
+      }
+    },
+    {
+      "id": "webhook-meta",
+      "name": "Webhook Meta",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        240
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "meta-wa",
+        "options": {}
+      },
+      "webhookId": "meta-wa"
+    },
+    {
+      "id": "route-meta",
+      "name": "Route Meta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        240
+      ],
+      "parameters": {
+        "jsCode": "\n// ===== CONFIG (edite aqui) =====\nconst cfg = {\n  evolutionUrl: 'http://host.docker.internal:8080',\n  instance: 'triagem',\n  graphVersion: 'v21.0',\n  phoneNumberId: 'COLOQUE_PHONE_NUMBER_ID',\n  admin: '5511999999999', // número do admin, só dígitos (formato Cloud API)\n  sourceGroups: ['120363000000000001@g.us'],\n  destGroups: ['120363000000000002@g.us'],\n};\n// ===============================\n\nconst body = $input.first().json.body ?? $input.first().json;\nconst msg = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];\nif (!msg || msg.type !== 'text') return [];\nif (String(msg.from).replace(/\\D/g, '') !== cfg.admin) return [];\nconst text = msg.text?.body ?? '';\nif (!text.trim()) return [];\nreturn [{ json: { text, cfg } }];\n"
       }
     },
     {
@@ -91,21 +100,93 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        660,
-        120
+        440,
+        240
       ],
       "parameters": {
-        "jsCode": "\nconst { text, cfg } = $input.item.json;\nconst store = $getWorkflowStaticData('global');\nstore.pending = store.pending ?? {};\nconst toAdmin = (t) => ({ json: { number: cfg.admin, text: t, cfg } });\nconst mt = text.trim().match(/^(ok|sim|nao|não|n|editar)\\s+#?(\\d+)\\s*([\\s\\S]*)$/i);\nif (!mt) return [];\nconst cmd = mt[1].toLowerCase();\nconst id = mt[2];\nconst item = store.pending[id];\nif (!item) return [toAdmin('Anúncio #' + id + ' não encontrado (já tratado?).')];\nif (['nao', 'não', 'n'].includes(cmd)) {\n  delete store.pending[id];\n  return [toAdmin('🗑️ #' + id + ' descartado.')];\n}\nlet out = item.text;\nif (cmd === 'editar') {\n  if (!mt[3].trim()) return [toAdmin('Use: editar ' + id + ' <novo texto>')];\n  out = mt[3].trim();\n}\ndelete store.pending[id];\nconst sends = cfg.destGroups.map((g) => ({ json: { number: g, text: out, cfg } }));\nsends.push(toAdmin('✅ #' + id + ' repassado para ' + cfg.destGroups.length + ' grupo(s).'));\nreturn sends;\n"
+        "jsCode": "\nconst { text, cfg } = $input.item.json;\nconst store = $getWorkflowStaticData('global');\nstore.pending = store.pending ?? {};\nconst toAdmin = (t) => ({ json: { channel: 'meta', to: cfg.admin, text: t, cfg } });\nconst mt = text.trim().match(/^(ok|sim|nao|não|n|editar)\\s+#?(\\d+)\\s*([\\s\\S]*)$/i);\nif (!mt) return [];\nconst cmd = mt[1].toLowerCase();\nconst id = mt[2];\nconst item = store.pending[id];\nif (!item) return [toAdmin('Anúncio #' + id + ' não encontrado (já tratado?).')];\nif (['nao', 'não', 'n'].includes(cmd)) {\n  delete store.pending[id];\n  return [toAdmin('🗑️ #' + id + ' descartado.')];\n}\nlet out = item.text;\nif (cmd === 'editar') {\n  if (!mt[3].trim()) return [toAdmin('Use: editar ' + id + ' <novo texto>')];\n  out = mt[3].trim();\n}\ndelete store.pending[id];\nconst sends = cfg.destGroups.map((g) => ({ json: { channel: 'evolution', number: g, text: out, cfg } }));\nsends.push(toAdmin('✅ #' + id + ' repassado para ' + cfg.destGroups.length + ' grupo(s).'));\nreturn sends;\n"
       }
     },
     {
-      "id": "send",
-      "name": "Send",
+      "id": "webhook-meta-verify",
+      "name": "Webhook Meta Verify",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        480
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "meta-wa",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "meta-wa-verify"
+    },
+    {
+      "id": "respond-challenge",
+      "name": "Respond Challenge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        480
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.query['hub.verify_token'] === 'COLOQUE_VERIFY_TOKEN' ? $json.query['hub.challenge'] : '' }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "is-meta-channel",
+      "name": "Is Meta Channel",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        900,
+        120
+      ],
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.channel }}",
+              "value2": "meta"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "send-meta",
+      "name": "Send Meta",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1100,
-        0
+        1120,
+        40
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/{{ $json.cfg.graphVersion }}/{{ $json.cfg.phoneNumberId }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: \"whatsapp\", to: $json.to, type: \"text\", text: { body: $json.text } }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "send-evolution",
+      "name": "Send Evolution",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        220
       ],
       "parameters": {
         "method": "POST",
@@ -131,36 +212,18 @@
       "main": [
         [
           {
-            "node": "Route",
+            "node": "Route Evolution",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Route": {
-      "main": [
-        [
-          {
-            "node": "Is Group Msg",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Is Group Msg": {
+    "Route Evolution": {
       "main": [
         [
           {
             "node": "Gemini",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Handle Admin Reply",
             "type": "main",
             "index": 0
           }
@@ -182,7 +245,29 @@
       "main": [
         [
           {
-            "node": "Send",
+            "node": "Is Meta Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Meta": {
+      "main": [
+        [
+          {
+            "node": "Route Meta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Meta": {
+      "main": [
+        [
+          {
+            "node": "Handle Admin Reply",
             "type": "main",
             "index": 0
           }
@@ -193,7 +278,36 @@
       "main": [
         [
           {
-            "node": "Send",
+            "node": "Is Meta Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Meta Verify": {
+      "main": [
+        [
+          {
+            "node": "Respond Challenge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Meta Channel": {
+      "main": [
+        [
+          {
+            "node": "Send Meta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Evolution",
             "type": "main",
             "index": 0
           }
