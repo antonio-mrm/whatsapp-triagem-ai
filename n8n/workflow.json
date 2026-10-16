@@ -1,0 +1,207 @@
+{
+  "name": "WhatsApp Triagem AI",
+  "nodes": [
+    {
+      "id": "webhook-evolution",
+      "name": "Webhook Evolution",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "evolution-wa",
+        "options": {}
+      },
+      "webhookId": "evolution-wa"
+    },
+    {
+      "id": "route",
+      "name": "Route",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "\n// ===== CONFIG (edite aqui) =====\nconst cfg = {\n  evolutionUrl: 'http://host.docker.internal:8080',\n  instance: 'triagem',\n  admin: '5511999999999@s.whatsapp.net',\n  sourceGroups: ['120363000000000001@g.us'],\n  destGroups: ['120363000000000002@g.us'],\n};\n// ===============================\nconst body = $input.first().json.body ?? $input.first().json;\nconst d = body.data ?? {};\nconst key = d.key ?? {};\nif (key.fromMe || !key.remoteJid) return [];\nconst m = d.message ?? {};\nconst text = m.conversation ?? m.extendedTextMessage?.text ?? m.imageMessage?.caption ?? m.videoMessage?.caption ?? '';\nif (!text.trim()) return [];\nconst jid = key.remoteJid;\nif (jid === cfg.admin) return [{ json: { type: 'admin', text, cfg } }];\nif (cfg.sourceGroups.includes(jid)) {\n  return [{ json: { type: 'group_msg', text, jid, sender: key.participant ?? '', pushName: d.pushName ?? '', cfg } }];\n}\nreturn [];\n"
+      }
+    },
+    {
+      "id": "is-group-msg",
+      "name": "Is Group Msg",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.type }}",
+              "value2": "group_msg"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "gemini",
+      "name": "Gemini",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        -120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  contents: [{ parts: [{ text: 'Mensagem de grupo de repasse de veículos:\\n\"\"\"' + $json.text + '\"\"\"\\n\\nDecida se é um ANÚNCIO de veículo à venda/repasse. Se sim extraia os campos. Responda só JSON.' }] }],\n  generationConfig: {\n    responseMimeType: 'application/json',\n    responseSchema: {\n      type: 'OBJECT',\n      properties: {\n        is_ad: { type: 'BOOLEAN' },\n        marca: { type: 'STRING' }, modelo: { type: 'STRING' }, ano: { type: 'STRING' },\n        km: { type: 'STRING' }, preco: { type: 'STRING' }, contato: { type: 'STRING' },\n        resumo: { type: 'STRING' }\n      },\n      required: ['is_ad']\n    }\n  }\n}) }}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3
+    },
+    {
+      "id": "prepare-admin-msg",
+      "name": "Prepare Admin Msg",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "\nconst src = $('Route').item.json;\nconst raw = $input.item.json.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';\nlet ad; try { ad = JSON.parse(raw); } catch { return []; }\nif (!ad.is_ad) return [];\nconst store = $getWorkflowStaticData('global');\nstore.pending = store.pending ?? {};\nstore.counter = (store.counter ?? 0) + 1;\nconst id = store.counter;\nstore.pending[id] = { text: src.text, ad, from: src.pushName || src.sender, at: Date.now() };\nconst msg = [\n  '🚗 *Novo anúncio #' + id + '*',\n  'De: ' + (src.pushName || src.sender),\n  ad.marca || ad.modelo ? 'Veículo: ' + [ad.marca, ad.modelo, ad.ano].filter(Boolean).join(' ') : '',\n  ad.km ? 'KM: ' + ad.km : '',\n  ad.preco ? 'Preço: ' + ad.preco : '',\n  ad.contato ? 'Contato: ' + ad.contato : '',\n  '',\n  '--- texto original ---',\n  src.text,\n  '',\n  'Responda:',\n  '*ok ' + id + '*  → repassar',\n  '*nao ' + id + '*  → descartar',\n  '*editar ' + id + ' novo texto*  → repassar com seu texto',\n].filter((l) => l !== '').join('\\n');\nreturn [{ json: { number: src.cfg.admin, text: msg, cfg: src.cfg } }];\n"
+      }
+    },
+    {
+      "id": "handle-admin-reply",
+      "name": "Handle Admin Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        120
+      ],
+      "parameters": {
+        "jsCode": "\nconst { text, cfg } = $input.item.json;\nconst store = $getWorkflowStaticData('global');\nstore.pending = store.pending ?? {};\nconst toAdmin = (t) => ({ json: { number: cfg.admin, text: t, cfg } });\nconst mt = text.trim().match(/^(ok|sim|nao|não|n|editar)\\s+#?(\\d+)\\s*([\\s\\S]*)$/i);\nif (!mt) return [];\nconst cmd = mt[1].toLowerCase();\nconst id = mt[2];\nconst item = store.pending[id];\nif (!item) return [toAdmin('Anúncio #' + id + ' não encontrado (já tratado?).')];\nif (['nao', 'não', 'n'].includes(cmd)) {\n  delete store.pending[id];\n  return [toAdmin('🗑️ #' + id + ' descartado.')];\n}\nlet out = item.text;\nif (cmd === 'editar') {\n  if (!mt[3].trim()) return [toAdmin('Use: editar ' + id + ' <novo texto>')];\n  out = mt[3].trim();\n}\ndelete store.pending[id];\nconst sends = cfg.destGroups.map((g) => ({ json: { number: g, text: out, cfg } }));\nsends.push(toAdmin('✅ #' + id + ' repassado para ' + cfg.destGroups.length + ' grupo(s).'));\nreturn sends;\n"
+      }
+    },
+    {
+      "id": "send",
+      "name": "Send",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.cfg.evolutionUrl }}/message/sendText/{{ $json.cfg.instance }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ number: $json.number, text: $json.text }) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 3000
+            }
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Evolution": {
+      "main": [
+        [
+          {
+            "node": "Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route": {
+      "main": [
+        [
+          {
+            "node": "Is Group Msg",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Group Msg": {
+      "main": [
+        [
+          {
+            "node": "Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Admin Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini": {
+      "main": [
+        [
+          {
+            "node": "Prepare Admin Msg",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Admin Msg": {
+      "main": [
+        [
+          {
+            "node": "Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Admin Reply": {
+      "main": [
+        [
+          {
+            "node": "Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
