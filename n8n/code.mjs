@@ -15,6 +15,8 @@ const cfg = {
   sourceGroups: ['120363000000000001@g.us'],
   destGroups: ['120363000000000002@g.us'],
   fipeToken: '', // opcional (Parallelum), aumenta o limite diário
+  reminderTemplate: 'lembrete_janela', // template aprovado na Meta (sem variáveis)
+  windowReminderAfterHours: 20, // horas sem msg do admin até lembrar de reabrir a janela de 24h
 };
 // ===============================
 `;
@@ -91,6 +93,10 @@ const value = j.entry?.[0]?.changes?.[0]?.value ?? j.body?.entry?.[0]?.changes?.
 const msg = value.messages?.[0];
 if (!msg) return [];
 if (String(msg.from).replace(/\\D/g, '') !== cfg.admin) return [];
+// janela de 24h da Cloud API: toda msg do admin reabre a janela
+const store = $getWorkflowStaticData('global');
+store.lastAdminAt = Date.now();
+store.windowReminded = false;
 let text = '';
 let payload = '';
 if (msg.type === 'text') text = msg.text?.body ?? '';
@@ -174,6 +180,16 @@ async function fipeLookup(helpers, store, ad, cfg) {
   }
 }
 
+// Chave do "mesmo carro": marca + modelo + ano + km. Sem algum deles não dá para provar igualdade (null).
+function dupKey(ad) {
+  const km = toNumber(ad.km);
+  const ano = toNumber(ad.ano);
+  const marca = norm(ad.marca);
+  const modelo = norm(ad.modelo);
+  if (km == null || ano == null || !marca || !modelo) return null;
+  return [marca, modelo, ano, km].join('|');
+}
+
 async function prepareMain($input, $, $getWorkflowStaticData, helpers) {
   const src = $('Route').first().json;
   const cfg = src.cfg;
@@ -181,8 +197,12 @@ async function prepareMain($input, $, $getWorkflowStaticData, helpers) {
   if (!ad || !ad.is_ad) return [];
   const store = $getWorkflowStaticData('global');
   store.pending = store.pending ?? {};
+  store.seen = store.seen ?? {};
+  const key = dupKey(ad);
+  if (key && store.seen[key]) return [];
   store.counter = (store.counter ?? 0) + 1;
   const id = store.counter;
+  if (key) store.seen[key] = { id, at: Date.now() };
 
   const one = (v) => {
     const s = String(v ?? '').replace(/\s+/g, ' ').trim();
@@ -235,7 +255,7 @@ async function prepareMain($input, $, $getWorkflowStaticData, helpers) {
 }
 
 export const prepareCode = `${tables}
-${asNode(toNumber, fmtNum, parseGemini, norm, slug, regionLabel, fipeLookup, prepareMain)}
+${asNode(toNumber, fmtNum, parseGemini, norm, slug, regionLabel, fipeLookup, dupKey, prepareMain)}
 return await prepareMain($input, $, $getWorkflowStaticData, this.helpers);
 `;
 
@@ -304,4 +324,13 @@ function adminMain($input, $getWorkflowStaticData) {
 
 export const adminCode = `${asNode(toNumber, fmtNum, adminMain)}
 return adminMain($input, $getWorkflowStaticData);
+`;
+
+// ---------- Window Check (Schedule): lembra o admin de reabrir a janela de 24h ----------
+export const windowCode = `${cfgBlock}
+const store = $getWorkflowStaticData('global');
+if (!store.lastAdminAt || store.windowReminded) return [];
+if (Date.now() - store.lastAdminAt < cfg.windowReminderAfterHours * 3600 * 1000) return [];
+store.windowReminded = true;
+return [{ json: { to: cfg.admin, template: cfg.reminderTemplate, cfg } }];
 `;

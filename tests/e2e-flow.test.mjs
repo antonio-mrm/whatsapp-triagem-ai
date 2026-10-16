@@ -72,9 +72,9 @@ test('E2E: ❌ Passar → só aviso de descartado, nada vai aos grupos', async (
 
 test('E2E: dois anúncios seguidos, cada botão age no seu id', async () => {
   const store = {};
-  const g = { gemini: geminiNative(AD), helpers: fakeHttp(FIPE_OK).helpers, store };
-  await simulate('Webhook Evolution', evoPayload({ message: { conversation: 'anúncio A' } }), g);
-  await simulate('Webhook Evolution', evoPayload({ message: { conversation: 'anúncio B' } }), g);
+  const h = fakeHttp(FIPE_OK).helpers;
+  await simulate('Webhook Evolution', evoPayload({ message: { conversation: 'anúncio A' } }), { gemini: geminiNative(AD), helpers: h, store });
+  await simulate('Webhook Evolution', evoPayload({ message: { conversation: 'anúncio B' } }), { gemini: geminiNative({ ...AD, km: 60000 }), helpers: h, store });
   const { calls } = await reply(store, metaButton('approve:2'));
   assert.equal(calls[0].body.text, 'anúncio B');
   assert.equal(store.pending[1].text, 'anúncio A');
@@ -91,4 +91,25 @@ test('E2E: FIPE fora do ar não impede o card', async () => {
   const { calls } = await simulate('Webhook Evolution', evoPayload(), { gemini: geminiNative(AD), helpers: fakeHttp({}).helpers });
   assert.deepEqual(calls.map((c) => c.node), ['Message a model', 'Send card']);
   assert.equal(calls[1].body.template.components[0].parameters[4].text, '—');
+});
+
+test('E2E: mesmo carro postado em 2 grupos gera só 1 card', async () => {
+  const store = {};
+  const post = () => simulate('Webhook Evolution', evoPayload({ message: { conversation: GROUP_TEXT } }), {
+    gemini: geminiNative(AD), helpers: fakeHttp(FIPE_OK).helpers, store,
+  });
+  assert.deepEqual((await post()).calls.map((c) => c.node), ['Message a model', 'Send card']);
+  assert.deepEqual((await post()).calls.map((c) => c.node), ['Message a model']);
+  assert.equal(store.counter, 1);
+});
+
+test('E2E: lembrete da janela de 24h sai pelo template e só uma vez', async () => {
+  const store = { lastAdminAt: Date.now() - 21 * 3600 * 1000 };
+  const first = await simulate('Schedule Trigger', {}, { store });
+  assert.deepEqual(first.calls.map((c) => c.node), ['Send reminder']);
+  const body = first.calls[0].body;
+  assert.equal(body.to, ADMIN);
+  assert.equal(body.type, 'template');
+  assert.equal(body.template.name, 'lembrete_janela');
+  assert.deepEqual((await simulate('Schedule Trigger', {}, { store })).calls, []);
 });

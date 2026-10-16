@@ -57,3 +57,24 @@ test('Route Meta: formato do WhatsApp Trigger ignora outro remetente e status', 
 test('Route Meta: formato entry/changes sem "body" (webhook cru) também funciona', () => {
   assert.equal(run(metaPayload(ADMIN, 'nao 1').body)[0].json.text, 'nao 1');
 });
+
+// ---------- Janela de 24h: registra a última mensagem do admin ----------
+test('Route Meta: msg do admin grava lastAdminAt e rearma o lembrete', () => {
+  const store = { windowReminded: true };
+  const before = Date.now();
+  runCode('Route Meta', { json: metaPayload(ADMIN, 'ok 1'), store });
+  assert.ok(store.lastAdminAt >= before);
+  assert.equal(store.windowReminded, false);
+});
+
+test('Route Meta: toque em botão também conta como contato do admin', () => {
+  const store = {};
+  runCode('Route Meta', { json: metaButton('skip:1'), store });
+  assert.ok(store.lastAdminAt > 0);
+});
+
+test('Route Meta: remetente que não é admin não mexe na janela', () => {
+  const store = {};
+  runCode('Route Meta', { json: metaPayload('5511000000000'), store });
+  assert.equal(store.lastAdminAt, undefined);
+});

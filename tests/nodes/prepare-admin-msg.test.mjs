@@ -97,7 +97,7 @@ test('Prepare Admin Msg: link Webmotors por slug (acentos, espaços, caixa)', as
 test('Prepare Admin Msg: guarda pendente (texto original e preço) e incrementa contador', async () => {
   const store = {};
   await run(geminiNative(AD), { store });
-  await run(geminiNative(AD), { store });
+  await run(geminiNative({ ...AD, km: 60000 }), { store });
   assert.equal(store.counter, 2);
   assert.equal(store.pending[1].preco, 80000);
   assert.equal(store.pending[1].text, 'Civic 2018 80mil');
@@ -179,4 +179,60 @@ test('FIPE: token opcional vai no header', async () => {
   const http = fakeHttp(FIPE_OK);
   await run(geminiNative(AD), { http, src: route({ cfg: { ...cfg, fipeToken: 'abc' } }) });
   assert.equal(http.calls[0].headers['X-Subscription-Token'], 'abc');
+});
+
+// ---------- Dedupe: mesmo marca+modelo+ano+km = mesmo carro ----------
+const twice = async (a, b) => {
+  const store = {};
+  const first = await run(geminiNative({ ...AD, ...a }), { store });
+  const second = await run(geminiNative({ ...AD, ...b }), { store });
+  return { first: first.out, second: second.out, store };
+};
+
+test('Dedupe: mesmo carro (km igual) em outro grupo não gera 2º card nem gasta id', async () => {
+  const { first, second, store } = await twice({}, {});
+  assert.equal(first.length, 1);
+  assert.deepEqual(second, []);
+  assert.equal(store.counter, 1);
+  assert.equal(Object.keys(store.pending).length, 1);
+});
+
+test('Dedupe: km diferente = carros distintos', async () => {
+  const { first, second, store } = await twice({}, { km: 50100 });
+  assert.equal(first.length, 1);
+  assert.equal(second.length, 1);
+  assert.equal(store.counter, 2);
+});
+
+test('Dedupe: km ausente (null) sempre gera card', async () => {
+  const { first, second } = await twice({ km: null }, { km: null });
+  assert.equal(first.length, 1);
+  assert.equal(second.length, 1);
+});
+
+test('Dedupe: ignora caixa/acento e formato do km ("50 mil")', async () => {
+  const { second } = await twice({}, { marca: 'HONDA', modelo: 'cívic', km: '50 mil' });
+  assert.deepEqual(second, []);
+});
+
+test('Dedupe: preço diferente com o resto igual continua duplicado', async () => {
+  const { second } = await twice({}, { preco: 75000 });
+  assert.deepEqual(second, []);
+});
+
+test('Dedupe: ano ou modelo diferente = carro distinto', async () => {
+  assert.equal((await twice({}, { ano: 2019 })).second.length, 1);
+  assert.equal((await twice({}, { modelo: 'City' })).second.length, 1);
+});
+
+test('Dedupe: carro já descartado/aprovado (pendente apagado) não volta', async () => {
+  const store = {};
+  await run(geminiNative(AD), { store });
+  store.pending = {};
+  assert.deepEqual((await run(geminiNative(AD), { store })).out, []);
+});
+
+test('Dedupe: sem marca/modelo/ano não dá para provar igualdade → gera card', async () => {
+  const { second } = await twice({ marca: null }, { marca: null });
+  assert.equal(second.length, 1);
 });
