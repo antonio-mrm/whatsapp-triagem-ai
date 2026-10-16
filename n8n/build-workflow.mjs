@@ -1,89 +1,100 @@
 // Gera n8n/workflow.json (importar no n8n: Workflow > Import from file).
 // Uso: node n8n/build-workflow.mjs
-import { writeFileSync } from 'node:fs';
-import { routeEvolutionCode, routeMetaCode, prepareCode, adminCode } from './code.mjs';
+// Os nós nativos (Gemini e WhatsApp) partem de n8n/n8n-export.json (export do n8n do usuário):
+// preserva type, typeVersion, posição, ids, credenciais e modelo; só sobrescreve os parâmetros.
+import { readFileSync, writeFileSync } from 'node:fs';
+import { routeCode, routeMetaCode, prepareCode, adminCode, geminiPromptPrefix, geminiPromptSuffix } from './code.mjs';
 
-const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN ?? 'COLOQUE_VERIFY_TOKEN';
+const exported = JSON.parse(readFileSync(new URL('./n8n-export.json', import.meta.url), 'utf8'));
+const fromExport = (name) => {
+  const n = exported.nodes.find((x) => x.name === name);
+  if (!n) throw new Error(`n8n-export.json não tem o nó "${name}"`);
+  return structuredClone(n);
+};
 
-const geminiBody = `={{ JSON.stringify({
-  contents: [{ parts: [{ text: 'Mensagem de grupo de repasse de veículos:\\n"""' + $json.text + '"""\\n\\nDecida se é um ANÚNCIO de veículo à venda/repasse. Se sim extraia os campos. Responda só JSON.' }] }],
-  generationConfig: {
-    responseMimeType: 'application/json',
-    responseSchema: {
-      type: 'OBJECT',
-      properties: {
-        is_ad: { type: 'BOOLEAN' },
-        marca: { type: 'STRING' }, modelo: { type: 'STRING' }, ano: { type: 'STRING' },
-        km: { type: 'STRING' }, preco: { type: 'STRING' }, contato: { type: 'STRING' },
-        resumo: { type: 'STRING' }
-      },
-      required: ['is_ad']
-    }
-  }
-}) }}`;
-
+// Nó nativo: mantém tudo do export, troca/mescla só os parâmetros.
+const native = (name, parameters) => {
+  const n = fromExport(name);
+  n.parameters = { ...n.parameters, ...parameters };
+  return n;
+};
 const node = (name, type, typeVersion, position, parameters, extra = {}) => ({
   id: name.toLowerCase().replace(/\W+/g, '-'), name, type, typeVersion, position, parameters, ...extra,
 });
+const withCode = (name, jsCode) => ({ ...fromExport(name), parameters: { jsCode } });
 
-const header = { authentication: 'genericCredentialType', genericAuthType: 'httpHeaderAuth', sendBody: true, specifyBody: 'json' };
+// ---- Gemini nativo: texto original entra intacto; resposta é JSON ----
+const geminiContent = `={{ ${JSON.stringify(geminiPromptPrefix)} + $json.text + ${JSON.stringify(geminiPromptSuffix)} }}`;
+
+// ---- Card com 3 botões (template quick-reply, payload dinâmico com o id do anúncio) ----
+const cardBody = '={{ JSON.stringify({ messaging_product: "whatsapp", to: $json.to, type: "template", '
+  + 'template: { name: $json.template, language: { code: "pt_BR" }, components: [ '
+  + '{ type: "body", parameters: $json.vars.map((v) => ({ type: "text", text: v })) }, '
+  + '...$json.payloads.map((p, i) => ({ type: "button", sub_type: "quick_reply", index: String(i), parameters: [ { type: "payload", payload: p } ] })) '
+  + '] } }) }}';
+
+const sendMessage = native('Send message', {
+  resource: 'message',
+  operation: 'send',
+  phoneNumberId: '={{ $json.cfg.phoneNumberId }}',
+  recipientPhoneNumber: '={{ $json.to }}',
+  textBody: '={{ $json.text }}',
+});
+sendMessage.position = [400, 240]; // ramo do admin (texto); o card usa "Send card"
 
 const nodes = [
-  node('Webhook Evolution', 'n8n-nodes-base.webhook', 2, [0, 0], { httpMethod: 'POST', path: 'evolution-wa', options: {} }, { webhookId: 'evolution-wa' }),
-  node('Route Evolution', 'n8n-nodes-base.code', 2, [220, 0], { jsCode: routeEvolutionCode }),
-  node('Gemini', 'n8n-nodes-base.httpRequest', 4.2, [440, 0], {
-    method: 'POST',
-    url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
-    ...header,
-    jsonBody: geminiBody,
-    options: {},
-  }, { retryOnFail: true, maxTries: 3 }),
-  node('Prepare Admin Msg', 'n8n-nodes-base.code', 2, [660, 0], { jsCode: prepareCode }),
-
-  node('Webhook Meta', 'n8n-nodes-base.webhook', 2, [0, 240], { httpMethod: 'POST', path: 'meta-wa', options: {} }, { webhookId: 'meta-wa' }),
-  node('Route Meta', 'n8n-nodes-base.code', 2, [220, 240], { jsCode: routeMetaCode }),
-  node('Handle Admin Reply', 'n8n-nodes-base.code', 2, [440, 240], { jsCode: adminCode }),
-
-  node('Webhook Meta Verify', 'n8n-nodes-base.webhook', 2, [0, 480], { httpMethod: 'GET', path: 'meta-wa', responseMode: 'responseNode', options: {} }, { webhookId: 'meta-wa-verify' }),
-  node('Respond Challenge', 'n8n-nodes-base.respondToWebhook', 1.1, [220, 480], {
-    respondWith: 'text',
-    responseBody: `={{ $json.query['hub.verify_token'] === '${VERIFY_TOKEN}' ? $json.query['hub.challenge'] : '' }}`,
-    options: {},
-  }),
-
-  node('Is Meta Channel', 'n8n-nodes-base.if', 1, [900, 120], {
-    conditions: { string: [{ value1: '={{ $json.channel }}', value2: 'meta' }] },
-  }),
-  node('Send Meta', 'n8n-nodes-base.httpRequest', 4.2, [1120, 40], {
+  // ----- Ramo 1: grupos (Evolution) → Gemini → card ao admin -----
+  fromExport('Webhook Evolution'),
+  withCode('Route', routeCode),
+  fromExport('Is Group Msg'),
+  native('Message a model', { messages: { values: [{ content: geminiContent }] } }),
+  withCode('Prepare Admin Msg', prepareCode),
+  node('Send card', 'n8n-nodes-base.httpRequest', 4.2, [608, -96], {
     method: 'POST',
     url: '=https://graph.facebook.com/{{ $json.cfg.graphVersion }}/{{ $json.cfg.phoneNumberId }}/messages',
-    ...header,
-    jsonBody: '={{ JSON.stringify({ messaging_product: "whatsapp", to: $json.to, type: "text", text: { body: $json.text } }) }}',
+    authentication: 'predefinedCredentialType',
+    nodeCredentialType: 'whatsAppApi',
+    sendBody: true,
+    specifyBody: 'json',
+    jsonBody: cardBody,
     options: {},
   }),
-  node('Send Evolution', 'n8n-nodes-base.httpRequest', 4.2, [1120, 220], {
+
+  // ----- Ramo 2: respostas do admin (WhatsApp Trigger nativo, já trata a verificação da Meta) -----
+  node('WhatsApp Trigger', 'n8n-nodes-base.whatsAppTrigger', 1, [-544, 320], { updates: ['messages'], options: {} }, { webhookId: 'whatsapp-trigger' }),
+  node('Route Meta', 'n8n-nodes-base.code', 2, [-320, 320], { jsCode: routeMetaCode }),
+  node('Handle Admin Reply', 'n8n-nodes-base.code', 2, [-96, 320], { jsCode: adminCode }),
+  node('Is Meta Channel', 'n8n-nodes-base.if', 1, [128, 320], {
+    conditions: { string: [{ value1: '={{ $json.channel }}', value2: 'meta' }] },
+  }),
+  sendMessage,
+  node('Send Evolution', 'n8n-nodes-base.httpRequest', 4.2, [400, 440], {
     method: 'POST',
     url: '={{ $json.cfg.evolutionUrl }}/message/sendText/{{ $json.cfg.instance }}',
-    ...header,
+    authentication: 'genericCredentialType',
+    genericAuthType: 'httpHeaderAuth',
+    sendBody: true,
+    specifyBody: 'json',
     jsonBody: '={{ JSON.stringify({ number: $json.number, text: $json.text }) }}',
     options: { batching: { batch: { batchSize: 1, batchInterval: 3000 } } },
   }),
+
 ];
 
 const link = (to) => [{ node: to, type: 'main', index: 0 }];
 const connections = {
-  'Webhook Evolution': { main: [link('Route Evolution')] },
-  'Route Evolution': { main: [link('Gemini')] },
-  Gemini: { main: [link('Prepare Admin Msg')] },
-  'Prepare Admin Msg': { main: [link('Is Meta Channel')] },
-  'Webhook Meta': { main: [link('Route Meta')] },
+  'Webhook Evolution': { main: [link('Route')] },
+  Route: { main: [link('Is Group Msg')] },
+  'Is Group Msg': { main: [link('Message a model'), []] },
+  'Message a model': { main: [link('Prepare Admin Msg')] },
+  'Prepare Admin Msg': { main: [link('Send card')] },
+  'WhatsApp Trigger': { main: [link('Route Meta')] },
   'Route Meta': { main: [link('Handle Admin Reply')] },
   'Handle Admin Reply': { main: [link('Is Meta Channel')] },
-  'Webhook Meta Verify': { main: [link('Respond Challenge')] },
-  'Is Meta Channel': { main: [link('Send Meta'), link('Send Evolution')] },
+  'Is Meta Channel': { main: [link('Send message'), link('Send Evolution')] },
 };
 
 writeFileSync(new URL('./workflow.json', import.meta.url), JSON.stringify({
-  name: 'WhatsApp Triagem AI', nodes, connections, settings: { executionOrder: 'v1' },
+  name: exported.name ?? 'WhatsApp Triagem AI', nodes, connections, settings: exported.settings ?? { executionOrder: 'v1' },
 }, null, 2));
 console.log('ok: n8n/workflow.json');

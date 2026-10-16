@@ -1,0 +1,9 @@
+{
+  "name": "whatsapp-triagem-ai",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node n8n/build-workflow.mjs",
+    "test": "node n8n/build-workflow.mjs && node --test \"tests/**/*.test.mjs\""
+  }
+}

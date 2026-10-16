@@ -2,84 +2,129 @@
   "name": "WhatsApp Triagem AI",
   "nodes": [
     {
-      "id": "webhook-evolution",
-      "name": "Webhook Evolution",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
-      "position": [
-        0,
-        0
-      ],
       "parameters": {
         "httpMethod": "POST",
         "path": "evolution-wa",
         "options": {}
       },
+      "id": "cbaf4a35-e155-4a27-a184-965e00f3db43",
+      "name": "Webhook Evolution",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -544,
+        16
+      ],
       "webhookId": "evolution-wa"
     },
     {
-      "id": "route-evolution",
-      "name": "Route Evolution",
+      "parameters": {
+        "jsCode": "\n// ===== CONFIG (edite aqui) =====\nconst cfg = {\n  evolutionUrl: 'http://host.docker.internal:8080',\n  instance: 'triagem',\n  phoneNumberId: 'COLOQUE_PHONE_NUMBER_ID',\n  graphVersion: 'v21.0',\n  template: 'novo_anuncio',\n  admin: '5511999999999', // número do admin, só dígitos (formato Cloud API)\n  sourceGroups: ['120363000000000001@g.us'],\n  destGroups: ['120363000000000002@g.us'],\n  fipeToken: '', // opcional (Parallelum), aumenta o limite diário\n};\n// ===============================\n\nconst body = $input.first().json.body ?? $input.first().json;\nconst d = body.data ?? {};\nconst key = d.key ?? {};\nif (key.fromMe || !key.remoteJid) return [];\nconst m = d.message ?? {};\nconst text = m.conversation ?? m.extendedTextMessage?.text ?? m.imageMessage?.caption ?? m.videoMessage?.caption ?? '';\nif (!text.trim()) return [];\nconst jid = key.remoteJid;\nif (!cfg.sourceGroups.includes(jid)) return [];\nconst ts = Number(d.messageTimestamp?.low ?? d.messageTimestamp) || 0;\nreturn [{ json: { type: 'group_msg', text, jid, sender: key.participant ?? '', pushName: d.pushName ?? '', ts, cfg } }];\n"
+      },
+      "id": "8b336b37-e885-471e-858c-ad5f41c4b465",
+      "name": "Route",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        220,
-        0
-      ],
-      "parameters": {
-        "jsCode": "\n// ===== CONFIG (edite aqui) =====\nconst cfg = {\n  evolutionUrl: 'http://host.docker.internal:8080',\n  instance: 'triagem',\n  graphVersion: 'v21.0',\n  phoneNumberId: 'COLOQUE_PHONE_NUMBER_ID',\n  admin: '5511999999999', // número do admin, só dígitos (formato Cloud API)\n  sourceGroups: ['120363000000000001@g.us'],\n  destGroups: ['120363000000000002@g.us'],\n};\n// ===============================\n\nconst body = $input.first().json.body ?? $input.first().json;\nconst d = body.data ?? {};\nconst key = d.key ?? {};\nif (key.fromMe || !key.remoteJid) return [];\nconst m = d.message ?? {};\nconst text = m.conversation ?? m.extendedTextMessage?.text ?? m.imageMessage?.caption ?? m.videoMessage?.caption ?? '';\nif (!text.trim()) return [];\nconst jid = key.remoteJid;\nif (!cfg.sourceGroups.includes(jid)) return [];\nreturn [{ json: { type: 'group_msg', text, jid, sender: key.participant ?? '', pushName: d.pushName ?? '', cfg } }];\n"
-      }
+        -320,
+        16
+      ]
     },
     {
-      "id": "gemini",
-      "name": "Gemini",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        440,
-        0
-      ],
       "parameters": {
-        "method": "POST",
-        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  contents: [{ parts: [{ text: 'Mensagem de grupo de repasse de veículos:\\n\"\"\"' + $json.text + '\"\"\"\\n\\nDecida se é um ANÚNCIO de veículo à venda/repasse. Se sim extraia os campos. Responda só JSON.' }] }],\n  generationConfig: {\n    responseMimeType: 'application/json',\n    responseSchema: {\n      type: 'OBJECT',\n      properties: {\n        is_ad: { type: 'BOOLEAN' },\n        marca: { type: 'STRING' }, modelo: { type: 'STRING' }, ano: { type: 'STRING' },\n        km: { type: 'STRING' }, preco: { type: 'STRING' }, contato: { type: 'STRING' },\n        resumo: { type: 'STRING' }\n      },\n      required: ['is_ad']\n    }\n  }\n}) }}",
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.type }}",
+              "value2": "group_msg"
+            }
+          ]
+        }
+      },
+      "id": "6fd1be7e-6d1b-4c3d-89c7-fd8d86c9bcbd",
+      "name": "Is Group Msg",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -112,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "models/gemini-3-flash-preview"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ \"Você recebe uma mensagem de WhatsApp de grupo de repasse de veículos, em QUALQUER formatação.\\nDecida se é um ANÚNCIO de veículo à venda. Se for, associe cada dado ao seu valor e responda SOMENTE um JSON (sem markdown) com as chaves:\\nis_ad (boolean); nome_carro (marca + modelo + versão); marca; modelo (sem a versão); ano (número, ano do modelo); km (número inteiro);\\npreco (número em reais, ex.: 80000); ipva_pago (true/false/null); revisoes_em_dia (true/false/null); combustivel (texto);\\ncombustivel_deduzido (true se não estava escrito e você deduziu pelo modelo); cidade_uf (ex.: \\\"Campinas/SP\\\");\\nassumido (lista de strings com itens de conservação NÃO citados que você presumiu, ex.: \\\"Pneus 80%\\\", \\\"Manual + Chave Reserva\\\");\\nloja (nome da loja/anunciante); contato_nome; contato_telefone (só dígitos com DDD).\\nUse null quando a informação não existir. Nunca invente preço, km ou ano. Se não for anúncio responda {\\\"is_ad\\\": false}.\\nMensagem:\\n\\\"\\\"\\\"\\n\" + $json.text + \"\\n\\\"\\\"\\\"\" }}"
+            }
+          ]
+        },
+        "builtInTools": {},
         "options": {}
       },
-      "retryOnFail": true,
-      "maxTries": 3
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        96,
+        -96
+      ],
+      "id": "8c9737af-ccac-4891-a1b8-f62c38737bac",
+      "name": "Message a model"
     },
     {
-      "id": "prepare-admin-msg",
+      "parameters": {
+        "jsCode": "const UF_DDDS = {\"SP\":[11,12,13,14,15,16,17,18,19],\"RJ\":[21,22,24],\"ES\":[27,28],\"MG\":[31,32,33,34,35,37,38],\"PR\":[41,42,43,44,45,46],\"SC\":[47,48,49],\"RS\":[51,53,54,55],\"DF\":[61],\"GO\":[62,64],\"TO\":[63],\"MT\":[65,66],\"MS\":[67],\"AC\":[68],\"RO\":[69],\"BA\":[71,73,74,75,77],\"SE\":[79],\"PE\":[81,87],\"AL\":[82],\"PB\":[83],\"RN\":[84],\"CE\":[85,88],\"PI\":[86,89],\"MA\":[98,99],\"PA\":[91,93,94],\"AP\":[96],\"AM\":[92,97],\"RR\":[95]};\nconst UF_REGION = {\"Norte\":[\"AC\",\"AP\",\"AM\",\"PA\",\"RO\",\"RR\",\"TO\"],\"Nordeste\":[\"AL\",\"BA\",\"CE\",\"MA\",\"PB\",\"PE\",\"PI\",\"RN\",\"SE\"],\"Centro-Oeste\":[\"DF\",\"GO\",\"MT\",\"MS\"],\"Sudeste\":[\"ES\",\"MG\",\"RJ\",\"SP\"],\"Sul\":[\"PR\",\"RS\",\"SC\"]};\nfunction toNumber(v) {\n  if (typeof v === 'number') return Number.isFinite(v) ? v : null;\n  if (typeof v !== 'string') return null;\n  const m = v.toLowerCase().match(/(\\d[\\d.,]*)\\s*(mil|k)?/);\n  if (!m) return null;\n  let n = m[1];\n  if (n.includes('.') && n.includes(',')) n = n.replace(/\\./g, '').replace(',', '.');\n  else if (/^\\d{1,3}(\\.\\d{3})+$/.test(n)) n = n.replace(/\\./g, '');\n  else n = n.replace(',', '.');\n  const x = parseFloat(n) * (m[2] ? 1000 : 1);\n  return Number.isFinite(x) ? Math.round(x) : null;\n}\n\nfunction fmtNum(n) {\n  return n == null ? null : String(Math.round(n)).replace(/\\B(?=(\\d{3})+(?!\\d))/g, '.');\n}\n\nfunction parseGemini(out) {\n  let raw = out?.content?.parts?.[0]?.text ?? out?.candidates?.[0]?.content?.parts?.[0]?.text ?? out?.text ?? out?.output;\n  if (raw === undefined && out && typeof out === 'object' && 'is_ad' in out) raw = out;\n  if (raw && typeof raw === 'object') return raw;\n  if (typeof raw !== 'string') return null;\n  try {\n    return JSON.parse(raw.trim().replace(/^```(?:json)?\\s*/i, '').replace(/\\s*```$/, ''));\n  } catch {\n    return null;\n  }\n}\n\nfunction norm(s) {\n  return String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();\n}\n\nfunction slug(s) {\n  return norm(s).replace(/ /g, '-');\n}\n\nfunction regionLabel(cidadeUf, phone) {\n  let uf = String(cidadeUf ?? '').trim().toUpperCase().match(/([A-Z]{2})$/)?.[1];\n  if (!uf || !Object.values(UF_REGION).some((l) => l.includes(uf))) {\n    uf = null;\n    let d = String(phone ?? '').replace(/\\D/g, '');\n    if (d.startsWith('55') && d.length >= 12) d = d.slice(2);\n    const ddd = Number(d.slice(0, 2));\n    for (const [k, list] of Object.entries(UF_DDDS)) if (list.includes(ddd)) uf = k;\n  }\n  if (!uf) return null;\n  const region = Object.keys(UF_REGION).find((r) => UF_REGION[r].includes(uf));\n  return region + ' (' + uf + ')';\n}\n\nasync function fipeLookup(helpers, store, ad, cfg) {\n  try {\n    const base = 'https://fipe.parallelum.com.br/api/v2/cars';\n    const headers = cfg.fipeToken ? { 'X-Subscription-Token': cfg.fipeToken } : {};\n    const get = (path) => helpers.httpRequest({ method: 'GET', url: base + path, headers, json: true });\n    const pick = (list, wanted) => {\n      const want = norm(wanted).split(' ').filter(Boolean);\n      if (!want.length) return null;\n      let best = null;\n      for (const it of list) {\n        const name = norm(it.name).split(' ');\n        const hits = want.filter((w) => name.includes(w)).length;\n        if (hits < want.length) continue;\n        if (!best || name.length < best.len) best = { it, len: name.length };\n      }\n      return best ? best.it : null;\n    };\n    if (!ad.marca || !ad.modelo || !ad.ano) return null;\n    store.fipeBrands = store.fipeBrands ?? (await get('/brands'));\n    const brand = pick(store.fipeBrands, ad.marca);\n    if (!brand) return null;\n    const models = await get('/brands/' + brand.code + '/models');\n    const model = pick(models, ad.modelo);\n    if (!model) return null;\n    const years = await get('/brands/' + brand.code + '/models/' + model.code + '/years');\n    const cands = years.filter((y) => String(y.name).startsWith(String(ad.ano)));\n    if (!cands.length) return null;\n    const fuel = norm(ad.combustivel).split(' ')[0];\n    const year = cands.find((y) => fuel && norm(y.name).includes(fuel)) ?? cands[0];\n    const r = await get('/brands/' + brand.code + '/models/' + model.code + '/years/' + year.code);\n    return toNumber(String(r.price ?? '').replace(/^R\\$\\s*/, ''));\n  } catch {\n    return null;\n  }\n}\n\nasync function prepareMain($input, $, $getWorkflowStaticData, helpers) {\n  const src = $('Route').first().json;\n  const cfg = src.cfg;\n  const ad = parseGemini($input.first().json);\n  if (!ad || !ad.is_ad) return [];\n  const store = $getWorkflowStaticData('global');\n  store.pending = store.pending ?? {};\n  store.counter = (store.counter ?? 0) + 1;\n  const id = store.counter;\n\n  const one = (v) => {\n    const s = String(v ?? '').replace(/\\s+/g, ' ').trim();\n    return s && s !== 'null' ? s : '—';\n  };\n  const preco = toNumber(ad.preco);\n  const km = toNumber(ad.km);\n  const fipe = await fipeLookup(helpers, store, ad, cfg);\n  const sender = String(src.sender ?? '');\n  const senderPhone = sender.endsWith('@lid') ? '' : sender.split('@')[0].replace(/\\D/g, '');\n  const phone = String(ad.contato_telefone ?? '').replace(/\\D/g, '') || senderPhone;\n  const nome = ad.nome_carro || [ad.marca, ad.modelo].filter(Boolean).join(' ');\n  const dias = src.ts ? Math.max(0, Math.floor((Date.now() / 1000 - src.ts) / 86400)) : 0;\n  const link = ad.marca && ad.modelo\n    ? 'https://www.webmotors.com.br/carros/estoque/' + slug(ad.marca) + '/' + slug(ad.modelo)\n    : null;\n  const combustivel = ad.combustivel ? ad.combustivel + (ad.combustivel_deduzido ? ' (deduzido)' : '') : null;\n\n  const vars = [\n    nome,\n    ad.ano,\n    fmtNum(km),\n    fmtNum(preco),\n    fmtNum(fipe),\n    ad.ipva_pago === true ? 'pago' : ad.ipva_pago === false ? 'não pago' : 'não informado',\n    ad.revisoes_em_dia === true ? 'Revisões em dia' : ad.revisoes_em_dia === false ? 'Revisões pendentes' : 'Revisões não informadas',\n    combustivel,\n    regionLabel(ad.cidade_uf, phone),\n    Array.isArray(ad.assumido) && ad.assumido.length ? ad.assumido.join(', ') : null,\n    link,\n    ad.loja,\n    ad.contato_nome || src.pushName,\n    phone,\n    String(dias),\n  ].map(one);\n\n  store.pending[id] = {\n    text: src.text,\n    ad,\n    preco,\n    from: src.pushName || src.sender,\n    at: Date.now(),\n  };\n  return [{\n    json: {\n      channel: 'meta', kind: 'template', id, to: cfg.admin, template: cfg.template, vars,\n      payloads: ['approve:' + id, 'price:' + id, 'skip:' + id], cfg,\n    },\n  }];\n}\nreturn await prepareMain($input, $, $getWorkflowStaticData, this.helpers);\n"
+      },
+      "id": "868748ed-d666-4e35-bc59-2fc71cb20d1e",
       "name": "Prepare Admin Msg",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        660,
-        0
+        400,
+        -96
+      ]
+    },
+    {
+      "id": "send-card",
+      "name": "Send card",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        608,
+        -96
       ],
       "parameters": {
-        "jsCode": "\nconst src = $('Route Evolution').item.json;\nconst raw = $input.item.json.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';\nlet ad; try { ad = JSON.parse(raw); } catch { return []; }\nif (!ad.is_ad) return [];\nconst store = $getWorkflowStaticData('global');\nstore.pending = store.pending ?? {};\nstore.counter = (store.counter ?? 0) + 1;\nconst id = store.counter;\nstore.pending[id] = { text: src.text, ad, from: src.pushName || src.sender, at: Date.now() };\nconst msg = [\n  '🚗 *Novo anúncio #' + id + '*',\n  'De: ' + (src.pushName || src.sender),\n  ad.marca || ad.modelo ? 'Veículo: ' + [ad.marca, ad.modelo, ad.ano].filter(Boolean).join(' ') : '',\n  ad.km ? 'KM: ' + ad.km : '',\n  ad.preco ? 'Preço: ' + ad.preco : '',\n  ad.contato ? 'Contato: ' + ad.contato : '',\n  '',\n  '--- texto original ---',\n  src.text,\n  '',\n  'Responda:',\n  '*ok ' + id + '*  → repassar',\n  '*nao ' + id + '*  → descartar',\n  '*editar ' + id + ' novo texto*  → repassar com seu texto',\n].filter((l) => l !== '').join('\\n');\nreturn [{ json: { channel: 'meta', to: src.cfg.admin, text: msg, cfg: src.cfg } }];\n"
+        "method": "POST",
+        "url": "=https://graph.facebook.com/{{ $json.cfg.graphVersion }}/{{ $json.cfg.phoneNumberId }}/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "whatsAppApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: \"whatsapp\", to: $json.to, type: \"template\", template: { name: $json.template, language: { code: \"pt_BR\" }, components: [ { type: \"body\", parameters: $json.vars.map((v) => ({ type: \"text\", text: v })) }, ...$json.payloads.map((p, i) => ({ type: \"button\", sub_type: \"quick_reply\", index: String(i), parameters: [ { type: \"payload\", payload: p } ] })) ] } }) }}",
+        "options": {}
       }
     },
     {
-      "id": "webhook-meta",
-      "name": "Webhook Meta",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
+      "id": "whatsapp-trigger",
+      "name": "WhatsApp Trigger",
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "typeVersion": 1,
       "position": [
-        0,
-        240
+        -544,
+        320
       ],
       "parameters": {
-        "httpMethod": "POST",
-        "path": "meta-wa",
+        "updates": [
+          "messages"
+        ],
         "options": {}
       },
-      "webhookId": "meta-wa"
+      "webhookId": "whatsapp-trigger"
     },
     {
       "id": "route-meta",
@@ -87,11 +132,11 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        220,
-        240
+        -320,
+        320
       ],
       "parameters": {
-        "jsCode": "\n// ===== CONFIG (edite aqui) =====\nconst cfg = {\n  evolutionUrl: 'http://host.docker.internal:8080',\n  instance: 'triagem',\n  graphVersion: 'v21.0',\n  phoneNumberId: 'COLOQUE_PHONE_NUMBER_ID',\n  admin: '5511999999999', // número do admin, só dígitos (formato Cloud API)\n  sourceGroups: ['120363000000000001@g.us'],\n  destGroups: ['120363000000000002@g.us'],\n};\n// ===============================\n\nconst body = $input.first().json.body ?? $input.first().json;\nconst msg = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];\nif (!msg || msg.type !== 'text') return [];\nif (String(msg.from).replace(/\\D/g, '') !== cfg.admin) return [];\nconst text = msg.text?.body ?? '';\nif (!text.trim()) return [];\nreturn [{ json: { text, cfg } }];\n"
+        "jsCode": "\n// ===== CONFIG (edite aqui) =====\nconst cfg = {\n  evolutionUrl: 'http://host.docker.internal:8080',\n  instance: 'triagem',\n  phoneNumberId: 'COLOQUE_PHONE_NUMBER_ID',\n  graphVersion: 'v21.0',\n  template: 'novo_anuncio',\n  admin: '5511999999999', // número do admin, só dígitos (formato Cloud API)\n  sourceGroups: ['120363000000000001@g.us'],\n  destGroups: ['120363000000000002@g.us'],\n  fipeToken: '', // opcional (Parallelum), aumenta o limite diário\n};\n// ===============================\n\nconst j = $input.first().json;\n// WhatsApp Trigger entrega o \"value\" da Meta direto; webhook cru entrega entry[0].changes[0].value\nconst value = j.entry?.[0]?.changes?.[0]?.value ?? j.body?.entry?.[0]?.changes?.[0]?.value ?? j;\nconst msg = value.messages?.[0];\nif (!msg) return [];\nif (String(msg.from).replace(/\\D/g, '') !== cfg.admin) return [];\nlet text = '';\nlet payload = '';\nif (msg.type === 'text') text = msg.text?.body ?? '';\nelse if (msg.type === 'button') { payload = msg.button?.payload ?? ''; text = msg.button?.text ?? ''; }\nelse if (msg.type === 'interactive') {\n  const r = msg.interactive?.button_reply ?? msg.interactive?.list_reply;\n  payload = r?.id ?? ''; text = r?.title ?? '';\n} else return [];\nif (!text.trim() && !payload) return [];\nreturn [{ json: { text, payload, cfg } }];\n"
       }
     },
     {
@@ -100,43 +145,11 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        440,
-        240
+        -96,
+        320
       ],
       "parameters": {
-        "jsCode": "\nconst { text, cfg } = $input.item.json;\nconst store = $getWorkflowStaticData('global');\nstore.pending = store.pending ?? {};\nconst toAdmin = (t) => ({ json: { channel: 'meta', to: cfg.admin, text: t, cfg } });\nconst mt = text.trim().match(/^(ok|sim|nao|não|n|editar)\\s+#?(\\d+)\\s*([\\s\\S]*)$/i);\nif (!mt) return [];\nconst cmd = mt[1].toLowerCase();\nconst id = mt[2];\nconst item = store.pending[id];\nif (!item) return [toAdmin('Anúncio #' + id + ' não encontrado (já tratado?).')];\nif (['nao', 'não', 'n'].includes(cmd)) {\n  delete store.pending[id];\n  return [toAdmin('🗑️ #' + id + ' descartado.')];\n}\nlet out = item.text;\nif (cmd === 'editar') {\n  if (!mt[3].trim()) return [toAdmin('Use: editar ' + id + ' <novo texto>')];\n  out = mt[3].trim();\n}\ndelete store.pending[id];\nconst sends = cfg.destGroups.map((g) => ({ json: { channel: 'evolution', number: g, text: out, cfg } }));\nsends.push(toAdmin('✅ #' + id + ' repassado para ' + cfg.destGroups.length + ' grupo(s).'));\nreturn sends;\n"
-      }
-    },
-    {
-      "id": "webhook-meta-verify",
-      "name": "Webhook Meta Verify",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
-      "position": [
-        0,
-        480
-      ],
-      "parameters": {
-        "httpMethod": "GET",
-        "path": "meta-wa",
-        "responseMode": "responseNode",
-        "options": {}
-      },
-      "webhookId": "meta-wa-verify"
-    },
-    {
-      "id": "respond-challenge",
-      "name": "Respond Challenge",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.1,
-      "position": [
-        220,
-        480
-      ],
-      "parameters": {
-        "respondWith": "text",
-        "responseBody": "={{ $json.query['hub.verify_token'] === 'COLOQUE_VERIFY_TOKEN' ? $json.query['hub.challenge'] : '' }}",
-        "options": {}
+        "jsCode": "function toNumber(v) {\n  if (typeof v === 'number') return Number.isFinite(v) ? v : null;\n  if (typeof v !== 'string') return null;\n  const m = v.toLowerCase().match(/(\\d[\\d.,]*)\\s*(mil|k)?/);\n  if (!m) return null;\n  let n = m[1];\n  if (n.includes('.') && n.includes(',')) n = n.replace(/\\./g, '').replace(',', '.');\n  else if (/^\\d{1,3}(\\.\\d{3})+$/.test(n)) n = n.replace(/\\./g, '');\n  else n = n.replace(',', '.');\n  const x = parseFloat(n) * (m[2] ? 1000 : 1);\n  return Number.isFinite(x) ? Math.round(x) : null;\n}\n\nfunction fmtNum(n) {\n  return n == null ? null : String(Math.round(n)).replace(/\\B(?=(\\d{3})+(?!\\d))/g, '.');\n}\n\nfunction adminMain($input, $getWorkflowStaticData) {\n  const { text, payload, cfg } = $input.first().json;\n  const store = $getWorkflowStaticData('global');\n  store.pending = store.pending ?? {};\n  const toAdmin = (t) => ({ json: { channel: 'meta', kind: 'text', to: cfg.admin, text: t, cfg } });\n  // Repassa aos grupos (sem feedback ao admin). Preço novo vira a 1ª linha do post.\n  const publish = (id, price) => {\n    const item = store.pending[id];\n    const changed = price != null && price !== item.preco;\n    const out = changed ? '💰 R$ ' + fmtNum(price) + '\\n' + item.text : item.text;\n    delete store.pending[id];\n    if (store.awaiting === String(id)) store.awaiting = null;\n    return cfg.destGroups.map((g) => ({ json: { channel: 'evolution', number: g, text: out, cfg } }));\n  };\n  const notFound = (id) => [toAdmin('Anúncio #' + id + ' não encontrado (já tratado?).')];\n  const t = String(text ?? '').trim();\n\n  // 1) botões (template / interativo)\n  const bm = String(payload ?? '').match(/^(approve|price|skip):(\\d+)$/);\n  if (bm) {\n    const id = bm[2];\n    if (!store.pending[id]) return notFound(id);\n    if (bm[1] === 'approve') return publish(id, null);\n    if (bm[1] === 'skip') {\n      delete store.pending[id];\n      if (store.awaiting === id) store.awaiting = null;\n      return [toAdmin('🗑️ #' + id + ' descartado.')];\n    }\n    store.awaiting = id;\n    return [toAdmin('Informe o valor atualizado:')];\n  }\n\n  // 2) aguardando o valor do \"Editar Preço\": o próximo número já segue direto para o grupo\n  const isCommand = /^(ok|sim|nao|não|n|editar)\\s+#?\\d+/i.test(t);\n  if (store.awaiting && !isCommand) {\n    const id = store.awaiting;\n    if (!store.pending[id]) store.awaiting = null;\n    else {\n      const price = toNumber(t);\n      if (price == null) return [toAdmin('Não entendi o valor. Informe o valor atualizado:')];\n      return publish(id, price);\n    }\n  }\n\n  // 3) comandos de texto (fallback)\n  const mt = t.match(/^(ok|sim|nao|não|n|editar)\\s+#?(\\d+)\\s*([\\s\\S]*)$/i);\n  if (!mt) return [];\n  const cmd = mt[1].toLowerCase();\n  const id = mt[2];\n  const item = store.pending[id];\n  if (!item) return notFound(id);\n  if (['nao', 'não', 'n'].includes(cmd)) {\n    delete store.pending[id];\n    return [toAdmin('🗑️ #' + id + ' descartado.')];\n  }\n  if (cmd === 'editar') {\n    if (!mt[3].trim()) return [toAdmin('Use: editar ' + id + ' <novo texto>')];\n    item.text = mt[3].trim();\n  }\n  return publish(id, null);\n}\nreturn adminMain($input, $getWorkflowStaticData);\n"
       }
     },
     {
@@ -145,8 +158,8 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
       "position": [
-        900,
-        120
+        128,
+        320
       ],
       "parameters": {
         "conditions": {
@@ -160,24 +173,23 @@
       }
     },
     {
-      "id": "send-meta",
-      "name": "Send Meta",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        1120,
-        40
-      ],
       "parameters": {
-        "method": "POST",
-        "url": "=https://graph.facebook.com/{{ $json.cfg.graphVersion }}/{{ $json.cfg.phoneNumberId }}/messages",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ messaging_product: \"whatsapp\", to: $json.to, type: \"text\", text: { body: $json.text } }) }}",
-        "options": {}
-      }
+        "operation": "send",
+        "additionalFields": {},
+        "resource": "message",
+        "phoneNumberId": "={{ $json.cfg.phoneNumberId }}",
+        "recipientPhoneNumber": "={{ $json.to }}",
+        "textBody": "={{ $json.text }}"
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        400,
+        240
+      ],
+      "id": "61e2c04f-7bc7-4f27-aae6-6e579d6d9830",
+      "name": "Send message",
+      "webhookId": "91a46d7a-d500-4f27-b1c2-89520cb91e38"
     },
     {
       "id": "send-evolution",
@@ -185,8 +197,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1120,
-        220
+        400,
+        440
       ],
       "parameters": {
         "method": "POST",
@@ -212,25 +224,37 @@
       "main": [
         [
           {
-            "node": "Route Evolution",
+            "node": "Route",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Route Evolution": {
+    "Route": {
       "main": [
         [
           {
-            "node": "Gemini",
+            "node": "Is Group Msg",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Gemini": {
+    "Is Group Msg": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Message a model": {
       "main": [
         [
           {
@@ -245,14 +269,14 @@
       "main": [
         [
           {
-            "node": "Is Meta Channel",
+            "node": "Send card",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Webhook Meta": {
+    "WhatsApp Trigger": {
       "main": [
         [
           {
@@ -285,22 +309,11 @@
         ]
       ]
     },
-    "Webhook Meta Verify": {
-      "main": [
-        [
-          {
-            "node": "Respond Challenge",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Is Meta Channel": {
       "main": [
         [
           {
-            "node": "Send Meta",
+            "node": "Send message",
             "type": "main",
             "index": 0
           }
