@@ -3,7 +3,7 @@
 // Os nós nativos (Gemini e WhatsApp) partem de n8n/n8n-export.json (export do n8n do usuário):
 // preserva type, typeVersion, posição, ids, credenciais e modelo; só sobrescreve os parâmetros.
 import { readFileSync, writeFileSync } from 'node:fs';
-import { routeCode, routeMetaCode, prepareCode, adminCode, geminiPromptPrefix, geminiPromptSuffix } from './code.mjs';
+import { routeCode, routeMetaCode, prepareCode, adminCode, windowCode, geminiPromptPrefix, geminiPromptSuffix } from './code.mjs';
 
 const exported = JSON.parse(readFileSync(new URL('./n8n-export.json', import.meta.url), 'utf8'));
 const fromExport = (name) => {
@@ -79,6 +79,22 @@ const nodes = [
     options: { batching: { batch: { batchSize: 1, batchInterval: 3000 } } },
   }),
 
+  // ----- Ramo 3: lembrete para manter a janela de 24h da Cloud API aberta -----
+  node('Schedule Trigger', 'n8n-nodes-base.scheduleTrigger', 1.2, [-544, 640], {
+    rule: { interval: [{ field: 'hours', hoursInterval: 1 }] },
+  }),
+  node('Window Check', 'n8n-nodes-base.code', 2, [-320, 640], { jsCode: windowCode }),
+  node('Send reminder', 'n8n-nodes-base.httpRequest', 4.2, [-96, 640], {
+    method: 'POST',
+    url: '=https://graph.facebook.com/{{ $json.cfg.graphVersion }}/{{ $json.cfg.phoneNumberId }}/messages',
+    authentication: 'predefinedCredentialType',
+    nodeCredentialType: 'whatsAppApi',
+    sendBody: true,
+    specifyBody: 'json',
+    jsonBody: '={{ JSON.stringify({ messaging_product: "whatsapp", to: $json.to, type: "template", '
+      + 'template: { name: $json.template, language: { code: "pt_BR" } } }) }}',
+    options: {},
+  }, { credentials: fromExport('Send message').credentials }),
 ];
 
 const link = (to) => [{ node: to, type: 'main', index: 0 }];
@@ -92,6 +108,8 @@ const connections = {
   'Route Meta': { main: [link('Handle Admin Reply')] },
   'Handle Admin Reply': { main: [link('Is Meta Channel')] },
   'Is Meta Channel': { main: [link('Send message'), link('Send Evolution')] },
+  'Schedule Trigger': { main: [link('Window Check')] },
+  'Window Check': { main: [link('Send reminder')] },
 };
 
 writeFileSync(new URL('./workflow.json', import.meta.url), JSON.stringify({

@@ -17,6 +17,8 @@ export const cfg = {
   sourceGroups: [SRC],
   destGroups: [DST],
   fipeToken: '',
+  reminderTemplate: 'lembrete_janela',
+  windowReminderAfterHours: 20,
 };
 
 export const getNode = (name) => {
@@ -104,7 +106,8 @@ export async function simulate(startNode, json, { store = {}, gemini = geminiNat
     let outs; // array de saídas: cada uma = lista de itens
     switch (node.type) {
       case 'n8n-nodes-base.webhook':
-      case 'n8n-nodes-base.whatsAppTrigger': outs = [[item]]; break;
+      case 'n8n-nodes-base.whatsAppTrigger':
+      case 'n8n-nodes-base.scheduleTrigger': outs = [[item]]; break;
       case 'n8n-nodes-base.code': outs = [((await runCode(name, { json: item, store, prev, helpers })) ?? []).map((i) => i.json)]; break;
       case 'n8n-nodes-base.if': {
         const c = node.parameters.conditions.string[0];

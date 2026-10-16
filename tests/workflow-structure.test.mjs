@@ -10,15 +10,23 @@ test('Workflow: nomes de nós únicos', () => {
   assert.equal(new Set(names).size, names.length);
 });
 
-test('Workflow: contém os 12 blocos esperados', () => {
+test('Workflow: contém os 15 blocos esperados', () => {
   const expected = ['Webhook Evolution', 'Route', 'Is Group Msg', 'Message a model', 'Prepare Admin Msg', 'Send card',
-    'WhatsApp Trigger', 'Route Meta', 'Handle Admin Reply', 'Is Meta Channel', 'Send message', 'Send Evolution'];
+    'WhatsApp Trigger', 'Route Meta', 'Handle Admin Reply', 'Is Meta Channel', 'Send message', 'Send Evolution',
+    'Schedule Trigger', 'Window Check', 'Send reminder'];
   for (const n of expected) assert.ok(names.includes(n), `falta ${n}`);
   assert.equal(names.length, expected.length);
 });
 
 test('Workflow: fluxo principal segue o desenhado no n8n', () => {
   const chain = ['Webhook Evolution', 'Route', 'Is Group Msg', 'Message a model', 'Prepare Admin Msg', 'Send card'];
+  for (let i = 0; i < chain.length - 1; i++) {
+    assert.equal(wf.connections[chain[i]].main[0][0].node, chain[i + 1], `${chain[i]} → ${chain[i + 1]}`);
+  }
+});
+
+test('Workflow: lembrete da janela de 24h: Schedule → Window Check → Send reminder', () => {
+  const chain = ['Schedule Trigger', 'Window Check', 'Send reminder'];
   for (let i = 0; i < chain.length - 1; i++) {
     assert.equal(wf.connections[chain[i]].main[0][0].node, chain[i + 1], `${chain[i]} → ${chain[i + 1]}`);
   }
@@ -45,7 +53,7 @@ test('Workflow: toda conexão aponta para nós existentes', () => {
 
 test('Workflow: nenhum nó órfão (todos têm entrada ou são gatilho)', () => {
   const targets = new Set(Object.values(wf.connections).flatMap((c) => c.main.flat().map((l) => l.node)));
-  for (const n of wf.nodes) assert.ok(targets.has(n.name) || /\.(webhook|whatsAppTrigger)$/.test(n.type), `órfão: ${n.name}`);
+  for (const n of wf.nodes) assert.ok(targets.has(n.name) || /\.(webhook|whatsAppTrigger|scheduleTrigger)$/.test(n.type), `órfão: ${n.name}`);
 });
 
 test('Workflow: nós Code não usam .item (indisponível em "all items")', () => {

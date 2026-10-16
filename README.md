@@ -44,7 +44,7 @@ flowchart LR
 
 ## Fluxo do n8n
 
-O arquivo `n8n/workflow.json` é **um workflow com 2 cadeias** (cada uma começa em um gatilho) e 12 nós.
+O arquivo `n8n/workflow.json` é **um workflow com 3 cadeias** (cada uma começa em um gatilho) e 15 nós.
 
 ### Cadeia 1: anúncio no grupo → card para o admin
 
@@ -68,6 +68,16 @@ flowchart LR
     I -- "true (meta)" --> S1[Send message<br/>texto ao admin]
     I -- "false (evolution)" --> S2[Send Evolution<br/>post no grupo]
 ```
+
+### Cadeia 3: lembrete da janela de 24h
+
+```mermaid
+flowchart LR
+    S[Schedule Trigger<br/>a cada 1 h] --> W[Window Check]
+    W --> R[Send reminder<br/>template lembrete_janela]
+```
+
+A Cloud API só aceita mensagem livre até 24 h depois da última mensagem do admin. Toda mensagem do admin (texto ou botão) passa pelo **Route Meta**, que grava `lastAdminAt` e zera `windowReminded`. A cada hora o **Window Check** confere: se passaram `windowReminderAfterHours` (padrão 20 h) sem contato e o lembrete ainda não saiu naquele ciclo, o **Send reminder** manda o template `lembrete_janela` pedindo que o admin responda. Um lembrete por ciclo; a resposta do admin reabre a janela e rearma o ciclo. Sem nenhuma mensagem prévia do admin, nada é enviado.
 
 ### Os 3 botões do card
 
@@ -123,7 +133,7 @@ sequenceDiagram
 | **Route** | Code | Lê o payload e deixa passar só mensagens **de texto** de **grupos de origem** que não foram enviadas por você. Extrai o texto de `conversation`, `extendedTextMessage` ou da legenda de imagem/vídeo. Guarda também quem enviou (`sender`, `pushName`) e o horário (`ts`). **Contém o bloco `CONFIG`** (grupos, admin, Phone Number ID etc.). |
 | **Is Group Msg** | IF | Confere `type == group_msg`. O ramo *false* termina sem fazer nada. |
 | **Message a model** | Google Gemini (nativo) | Recebe o **texto original inteiro**, em qualquer formatação, e só interpreta: decide se é anúncio e associa cada dado ao seu valor, devolvendo **JSON**. Não inventa preço, km nem ano (usa `null`). |
-| **Prepare Admin Msg** | Code | Lê o JSON do Gemini e monta as 15 variáveis do template (ver abaixo). Consulta a FIPE, calcula região e "há X dias", gera o link Webmotors e guarda o anúncio como **pendente**. Não faz parsing de texto livre: só formata o JSON. |
+| **Prepare Admin Msg** | Code | Lê o JSON do Gemini e monta as 15 variáveis do template (ver abaixo). **Descarta duplicado** (mesmo marca + modelo + ano + km já visto; ver abaixo), consulta a FIPE, calcula região e "há X dias", gera o link Webmotors e guarda o anúncio como **pendente**. Não faz parsing de texto livre: só formata o JSON. |
 | **Send card** | HTTP Request (Graph API) | Envia ao admin o template `novo_anuncio` com 3 botões *quick-reply*. Cada botão leva o id do anúncio no payload (`approve:1`, `price:1`, `skip:1`). É HTTP porque o nó nativo do WhatsApp só envia texto simples. |
 
 **JSON devolvido pelo Gemini:**
@@ -153,6 +163,7 @@ sequenceDiagram
 | `fipeLookup` | Consulta a API FIPE (Parallelum): marca → modelo → ano → preço. Faz match aproximado de nomes (ignora acento e caixa; escolhe o nome mais curto que contém todos os termos) e escolhe o ano com o combustível certo. Guarda a lista de marcas em cache. **Qualquer falha devolve `null` e o card sai com `—`**; nunca derruba o fluxo. |
 | `regionLabel` | Descobre a região pela UF de `cidade_uf`; se faltar, pelo DDD do telefone. Ex.: `Sudeste (SP)`. |
 | `norm` / `slug` | Normalizam texto e geram o slug do link (`Gol G6` → `gol-g6`). |
+| `dupKey` | Chave do "mesmo carro": `marca\|modelo\|ano\|km` normalizados (sem acento/caixa). Devolve `null` se faltar qualquer um dos quatro. O preço não entra: o mesmo carro com preço diferente em outro grupo é duplicado. Km diferente = carro distinto. |
 | `prepareMain` | Orquestra tudo: gera o id do anúncio, monta as variáveis, guarda o pendente e devolve o item para o Send card. |
 
 ### Cadeia 2
@@ -225,9 +236,15 @@ Botões **Resposta rápida**, nesta ordem: `✅ Aprovar`, `💰 Editar Preço`, 
 
 Regras da Meta que o código respeita: variáveis sem quebra de linha, tab ou 4+ espaços seguidos; campo vazio vira `—`.
 
+### Template `lembrete_janela` (criar e aprovar na Meta)
+
+WhatsApp Manager → Modelos de mensagem → pt_BR, categoria **Utility**, nome `lembrete_janela`, **sem variáveis e sem botões**. Sugestão de corpo: `Responda OK para continuar recebendo os anúncios aqui.`
+
 ## Estado e dados
 
 - **Pendentes**: guardados no *static data* do workflow (`pending`, `counter`, `awaiting`, `fipeBrands`). Por isso as duas cadeias ficam no mesmo workflow: elas compartilham esse estado. O static data só persiste com o workflow **ativo (Publish)**.
+- **Duplicados**: `seen` (chave `dupKey` → id/hora) no static data. Anúncio com chave já vista é descartado antes de gastar id, FIPE ou card, mesmo que o primeiro já tenha sido aprovado ou passado. Sem km (ou marca/modelo/ano) não há chave: o anúncio sempre gera card.
+- **Janela de 24h**: `lastAdminAt` e `windowReminded` no static data.
 - **Banco**: o Postgres e o Redis do `docker-compose.yml` são **internos da Evolution API** (guardam a sessão do WhatsApp para não pedir o QR a cada restart). O fluxo do n8n não usa banco.
 - **Segredos**: `.env` (ignorado pelo git) e credenciais do n8n. Nada de chave no código.
 
@@ -270,7 +287,9 @@ Rebuilda o `workflow.json` e roda tudo (Node 22+). Gemini e FIPE são simulados,
 - FIPE: match aproximado por nome; sem correspondência o campo fica `—`. A API Parallelum sem token permite ~500 consultas/dia (`fipeToken` no `CONFIG` aumenta o limite).
 - O link Webmotors é a busca do modelo (`/carros/estoque/<marca>/<modelo>`), não um anúncio específico.
 - Só texto e legenda. Fotos não são repassadas.
-- Pendentes ficam no static data do n8n, sem expiração.
+- Pendentes ficam no static data do n8n, sem expiração. O mesmo vale para `seen` (dedupe): cresce sem limpeza.
+- Dedupe exige km: anúncio sem km nunca é considerado duplicado.
+- O lembrete da janela de 24h depende do template `lembrete_janela` aprovado; ele reabre a janela só quando o admin responde.
 - A Evolution API é não-oficial: use chip dedicado (risco de ban).
 
 ---
@@ -362,7 +381,7 @@ Nos nós com triângulo vermelho, selecione a credencial correspondente.
 
 ### 8. Editar o `CONFIG`
 
-Abra os nós **Route** e **Route Meta** (o bloco é idêntico nos dois) e ajuste:
+Abra os nós **Route**, **Route Meta** e **Window Check** (o bloco é idêntico nos três) e ajuste:
 
 ```js
 const cfg = {
@@ -375,10 +394,12 @@ const cfg = {
   sourceGroups: ['<id do grupo de origem>@g.us'],
   destGroups: ['<id do grupo de destino>@g.us'],
   fipeToken: '',                     // opcional
+  reminderTemplate: 'lembrete_janela',
+  windowReminderAfterHours: 20,      // horas sem msg do admin até lembrar
 };
 ```
 
-Se editar só em um dos dois nós, copie o mesmo bloco para o outro.
+Se editar só em um dos nós, copie o mesmo bloco para os outros.
 
 ### 9. Ativar e testar
 
